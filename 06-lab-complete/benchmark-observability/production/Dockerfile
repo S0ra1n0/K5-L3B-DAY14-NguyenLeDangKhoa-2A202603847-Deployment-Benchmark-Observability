@@ -26,6 +26,9 @@ RUN chown -R agent:agent /app
 USER agent
 
 ENV PATH=/home/agent/.local/bin:$PATH
+# Fix: user `agent` có home là /app (useradd -d /app) nên Python mặc định tìm package của
+# `pip install --user` ở /app/.local → ModuleNotFoundError: uvicorn. Chỉ rõ chỗ đã copy package.
+ENV PYTHONUSERBASE=/home/agent/.local
 ENV PYTHONPATH=/app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
