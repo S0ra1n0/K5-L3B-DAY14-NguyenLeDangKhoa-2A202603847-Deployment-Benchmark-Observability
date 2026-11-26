@@ -609,9 +609,30 @@ Total messages: 10
 
 ### Output `check_production_ready.py` (bản đầy đủ, có Docker)
 
+Chạy trong Ubuntu WSL2 (Docker Desktop bật WSL Integration), thư mục `06-lab-complete/`: `python check_production_ready.py`
+
 ```text
-(dán phần "📋 Checklist Deliverable" — phải là PASS 12/12)
+================================================================
+  📋 Checklist Deliverable
+     ✅ Dockerfile (multi-stage, < 500 MB)
+     ✅ docker-compose.yml (agent + redis)
+     ✅ .dockerignore
+     ✅ Health check endpoint (GET /health)
+     ✅ Readiness endpoint (GET /ready)
+     ✅ API Key authentication
+     ✅ Rate limiting
+     ✅ Cost guard
+     ✅ Config từ environment variables
+     ✅ Structured logging
+     ✅ Graceful shutdown
+     ✅ Public URL ready (Railway / Render config)
+----------------------------------------------------------------
+  Result: 12/12 tiêu chí đạt · 43/43 checks passed
+  🎉 PASS 12/12 — PRODUCTION READY! Deploy nào!
+================================================================
 ```
+
+Một số con số trong phần chi tiết: image **63 MB**; `docker stop` thoát với exit code 0 sau **1.1 s**; rate limit trả 429 sau 5 request (`RATE_LIMIT_PER_MINUTE=5`) và vẫn 429 sau khi restart agent (state trong Redis); `/ready` trả 503 khi Redis mất kết nối trong khi `/health` vẫn 200; cost guard trả 402 khi budget ≈ 0; 15 dòng log, dòng nào cũng là JSON hợp lệ.
 
 ---
 
@@ -629,4 +650,5 @@ Total messages: 10
 | 8 | Claude Code: chạy bổ sung các lệnh `curl -i` cho 4.2 (login, không token, token giả, có token) và 4.3 (chi tiết response 429), viết giải thích JWT và thuật toán rate limit | Output thật (token đã che), giải thích luồng JWT, 401 vs 403, Sliding Window Log | Đối chiếu `auth.py` (`verify_token`) và `rate_limiter.py`; vòng lặp 15 request ở 4.3 là tôi tự chạy |
 | 9 | Claude Code: làm Exercise 5.1 (đọc `/health`, `/ready`, chạy app ở cổng 8005, gọi thử) | Câu trả lời liveness vs readiness kèm bảng so sánh, output `curl -i` và log khởi động thật | Đọc lại dòng 104–170 của `05-scaling-reliability/develop/app.py` |
 | 10 | Claude Code: nhận xét output 5.2 (tôi tự chạy trong WSL), viết 5.3, chạy stack 5.4 (3 agent) và `test_stateless.py` cho 5.5 rồi viết giải thích | Phân tích thứ tự log graceful shutdown, giải thích stateless + hạn chế code mẫu, output thật của 5.4 / 5.5 | Đối chiếu log 5.2 với `lifespan` trong `develop/app.py`; đọc `production/app.py`, `nginx.conf` |
-| 11 | | | |
+| 11 | Claude Code: viết toàn bộ TODO Part 6 trong `06-lab-complete/` (config, auth, redis_client, rate_limiter, cost_guard, main.py, Dockerfile, compose, .dockerignore, .env.example, railway.toml, render.yaml) | Code đạt 42/42 check khi chạy `check_production_ready.py` từ Windows (chỉ thiếu SIGTERM), và runtime SIGTERM đạt khi chạy trong WSL | Tôi đọc lại từng file để giải thích được với Lab Coach; tự chạy `check_production_ready.py` bản đầy đủ trong WSL để lấy kết quả dán vào bài |
+| 12 | | | |
