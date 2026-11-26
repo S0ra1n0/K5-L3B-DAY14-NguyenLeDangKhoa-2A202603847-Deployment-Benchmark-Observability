@@ -224,22 +224,35 @@ agent-1  | INFO:     172.18.0.5:60656 - "POST /ask HTTP/1.1" 200 OK
 
 ### Exercise 3.1 / 3.2: Nền tảng chính
 
-- Nền tảng: Render / Railway
-- URL public:
-- Ảnh: `screenshots/dashboard.png`, `screenshots/running.png`, `screenshots/test.png`
+- **Nền tảng:** Render (Exercise 3.2), deploy bằng Blueprint `06-lab-complete/render.yaml`: web service `day14-agent` (Docker, free, Singapore) + Key Value `day14-redis` (Redis, free).
+- **URL public:** `https://day14-agent-gtyd.onrender.com`
+- **Tự kiểm 4 lệnh ở CP6:** `/health` → `200`, `/ready` → `200` (Redis trên Render kết nối được), `/ask` không key → `401`, `/ask` có key → `200`. Ảnh: `screenshots/test.png`.
+- **Script chấm kiểm URL:** `python check_production_ready.py --public-url https://day14-agent-gtyd.onrender.com` → `✅ Public URL: GET https://day14-agent-gtyd.onrender.com/health → 200`. Response thật: `/health` → `{"status":"ok","uptime_seconds":1018.3,"version":"1.0.0","environment":"production"}`, `/ready` → `{"ready":true}`.
+- **Ảnh:** `screenshots/dashboard.png`, `screenshots/running.png`, `screenshots/test.png`. Chi tiết ở `DEPLOYMENT.md`.
 
 ### Nền tảng còn lại: so sánh `railway.toml` vs `render.yaml`
 
+Hai file đều nằm trong `06-lab-complete/` và cùng deploy một `Dockerfile`, nhưng khác nhau về **phạm vi**: `railway.toml` chỉ là cấu hình build/deploy của **một service**, còn `render.yaml` là **Blueprint**, mô tả cả hạ tầng (nhiều service + cách chúng nối với nhau) theo kiểu **Infrastructure as Code**.
+
 | Điểm | `railway.toml` | `render.yaml` | Vì sao khác |
 |---|---|---|---|
-| Builder / runtime | | | |
-| Health check | | | |
-| Secret / env var | | | |
-| Redis / service phụ | | | |
+| Định dạng / phạm vi | TOML, 1 service: `[build]` + `[deploy]` | YAML, danh sách `services:` (web + keyvalue) | Railway tạo project / service / Redis bằng dashboard hoặc CLI (`railway init`, `railway add`), file chỉ chỉnh cách build và chạy. Render dựng **toàn bộ** stack từ một file (New → Blueprint), nên file phải khai báo mọi tài nguyên. |
+| Builder / runtime | `builder = "DOCKERFILE"`, `dockerfilePath = "Dockerfile"` | `runtime: docker`, `rootDir: 06-lab-complete`, `dockerfilePath: ./Dockerfile`, `dockerContext: .` | Railway deploy thư mục đang đứng khi chạy `railway up` (đã ở trong `06-lab-complete/`). Render build từ GitHub repo, nên phải chỉ ra thư mục con bằng `rootDir` (các đường dẫn Docker tính từ `rootDir`). |
+| Health check | `healthcheckPath = "/health"`, `healthcheckTimeout = 100` | `healthCheckPath: /health` | Cùng ý nghĩa: nền tảng chỉ chuyển traffic sang bản deploy mới khi `/health` trả 200 (**zero-downtime deploy**), và restart khi fail. Railway cho chỉnh timeout và restart policy (`restartPolicyType = "ON_FAILURE"`, tối đa 3 lần) ngay trong file. |
+| Secret / env var | **Không có** trong file: đặt bằng `railway variables set AGENT_API_KEY=...` hoặc dashboard | Khai báo trong `envVars`: `AGENT_API_KEY` dùng `generateValue: true` (Render tự sinh, không ghi giá trị); biến thường (`RATE_LIMIT_PER_MINUTE`...) ghi `value` | Railway tách hẳn secret khỏi file. Render cần khai báo biến trong Blueprint để dựng lại được stack, nhưng secret vẫn không ghi giá trị: dùng `generateValue` hoặc `sync: false` (nhập tay trên dashboard). |
+| Redis / service phụ | Không khai báo: thêm Redis bằng `railway add` (plugin), rồi đặt `REDIS_URL` tham chiếu biến của Redis service | Khai báo luôn service `type: keyvalue` (`day14-redis`), nối bằng `REDIS_URL: fromService: {type: keyvalue, name: day14-redis, property: connectionString}` | Blueprint nối các service bằng **tham chiếu** thay vì copy chuỗi kết nối: Render tự điền URL nội bộ, đổi Redis không phải sửa agent. `ipAllowList: []` để Redis chỉ nhận kết nối trong mạng nội bộ Render. |
+| Port | Không khai báo, Railway cấp `PORT` | Không khai báo, Render cấp `PORT` | Cả hai dựa vào `CMD` của Dockerfile đọc `${PORT:-8000}`. |
 
 ### Exercise 3.3: Pipeline Cloud Run (`cloudbuild.yaml` + `service.yaml`)
 
-(3–5 dòng mô tả các bước CI/CD)
+`cloudbuild.yaml` là pipeline CI/CD của **Cloud Build**, chạy tuần tự 4 bước (mỗi bước `waitFor` bước trước, bước nào fail thì dừng luôn):
+
+1. **test**: trong image `python:3.11-slim`, cài `requirements.txt` + `pytest` rồi chạy `pytest tests/`; test fail thì không build, không deploy (**quality gate**).
+2. **build**: `docker build` với 2 tag: `ai-agent:$COMMIT_SHA` (truy vết được image ứng với commit nào, rollback dễ) và `:latest`; `--cache-from=...:latest` để dùng lại layer cache, build nhanh hơn.
+3. **push**: đẩy cả 2 tag lên Container Registry (`gcr.io/$PROJECT_ID/ai-agent`).
+4. **deploy**: `gcloud run deploy` image theo `$COMMIT_SHA` lên Cloud Run (`asia-southeast1`), public (`--allow-unauthenticated`), autoscale 1–10 instance, 1 CPU / 512 Mi, timeout 60 s, `ENVIRONMENT=production`, secret `OPENAI_API_KEY` lấy từ **Secret Manager** (`--set-secrets`) chứ không nằm trong code hay pipeline.
+
+`service.yaml` mô tả **trạng thái mong muốn** của service (Knative, declarative): `minScale: 1` để tránh **cold start**, `maxScale: 10`, `containerConcurrency: 80` request / instance, giới hạn tài nguyên, secret `OPENAI_API_KEY` / `AGENT_API_KEY` từ Secret Manager qua `secretKeyRef`, `livenessProbe` gọi `/health` và `startupProbe` gọi `/ready`. Một điểm chưa khớp: bước test chạy `pytest tests/` nhưng thư mục mẫu không có `tests/`, nên muốn dùng thật phải viết test trước.
 
 ---
 
@@ -651,4 +664,5 @@ Một số con số trong phần chi tiết: image **63 MB**; `docker stop` tho�
 | 9 | Claude Code: làm Exercise 5.1 (đọc `/health`, `/ready`, chạy app ở cổng 8005, gọi thử) | Câu trả lời liveness vs readiness kèm bảng so sánh, output `curl -i` và log khởi động thật | Đọc lại dòng 104–170 của `05-scaling-reliability/develop/app.py` |
 | 10 | Claude Code: nhận xét output 5.2 (tôi tự chạy trong WSL), viết 5.3, chạy stack 5.4 (3 agent) và `test_stateless.py` cho 5.5 rồi viết giải thích | Phân tích thứ tự log graceful shutdown, giải thích stateless + hạn chế code mẫu, output thật của 5.4 / 5.5 | Đối chiếu log 5.2 với `lifespan` trong `develop/app.py`; đọc `production/app.py`, `nginx.conf` |
 | 11 | Claude Code: viết toàn bộ TODO Part 6 trong `06-lab-complete/` (config, auth, redis_client, rate_limiter, cost_guard, main.py, Dockerfile, compose, .dockerignore, .env.example, railway.toml, render.yaml) | Code đạt 42/42 check khi chạy `check_production_ready.py` từ Windows (chỉ thiếu SIGTERM), và runtime SIGTERM đạt khi chạy trong WSL | Tôi đọc lại từng file để giải thích được với Lab Coach; tự chạy `check_production_ready.py` bản đầy đủ trong WSL để lấy kết quả dán vào bài |
-| 12 | | | |
+| 12 | Claude Code: hướng dẫn deploy Render (Blueprint, lấy key, 4 lệnh tự kiểm), viết mục Part 3 (so sánh `railway.toml` / `render.yaml`, pipeline Cloud Run) và `DEPLOYMENT.md` | Các bước deploy, bảng so sánh, mô tả 4 bước CI/CD của `cloudbuild.yaml` + `service.yaml` | Tôi tự deploy trên Render và tự chạy 4 lệnh tự kiểm (`200 200 401 200`); đọc lại `cloudbuild.yaml`, `service.yaml` để đối chiếu |
+| 13 | | | |
